@@ -58,6 +58,8 @@ def use_sample(kind: str):
 
 def add_quick_concern(pick: str):
     cur = st.session_state.concern.strip()
+    if pick.lower() in cur.lower():
+        return  # already added
     st.session_state.concern = (cur + " " + pick).strip() if cur else pick
 
 
@@ -164,7 +166,9 @@ if st.session_state.step == 1:
         st.caption("Quick add")
         qc = st.columns(2)
         for i, q in enumerate(QUICK_CONCERNS):
-            qc[i % 2].button(q, key=f"qc{i}", on_click=add_quick_concern, args=(q,), use_container_width=True)
+            added = q.lower() in (st.session_state.concern or "").lower()  # grey out once it is in the box
+            qc[i % 2].button(q, key=f"qc{i}", on_click=add_quick_concern, args=(q,), use_container_width=True,
+                             disabled=added)
 
     has_report = bool(uploaded) or bool(pasted.strip()) or bool(st.session_state.sample)
     st.write("")
