@@ -66,7 +66,7 @@ def verify(result) -> int:
     return changed
 
 
-def check_completeness(result) -> None:
+def check_completeness(result, rechecked: bool = False) -> None:
     """If the AI counted more test rows than it listed, tell the user so they never assume the list is complete."""
     result.completeness_note = None
     seen, listed = getattr(result, "tests_seen", 0) or 0, len(result.findings)
@@ -74,6 +74,8 @@ def check_completeness(result) -> None:
         result.completeness_note = ("No individual results could be listed from this document. Please try again, "
                                     "or use a clearer file, and check the original report yourself.")
     elif seen and listed < seen:
-        result.completeness_note = (f"This explanation lists {listed} of the roughly {seen} results the AI found in your report. "
-                                    f"Some results may be missing, so please check the original report for the rest. "
+        extra = (" A second automatic check did not find the missing ones, so the count may simply be off by a little."
+                 if rechecked else "")
+        result.completeness_note = (f"This explanation lists {listed} of the roughly {seen} results the AI found in your report."
+                                    f"{extra} Some results may be missing, so please check the original report for the rest. "
                                     f"Try again, or upload the pages separately, if you need every result explained.")
