@@ -73,14 +73,19 @@ def analyze(
         return any(k in low for k in ("503", "unavailable", "overloaded", "high demand", "429",
                                       "resource_exhausted"))
 
-    def _config(fast: bool):
+    # If a model answers "400 invalid argument", the usual cause is an output-size setting it does not accept.
+    # Step down: 20000 tokens -> 8192 -> the model's own default.
+    TOKEN_STEPS = [20000, 8192, None]
+
+    def _config(fast: bool, step: int = 0):
         kwargs = dict(
             system_instruction=SYSTEM_INSTRUCTION,
             response_mime_type="application/json",
             response_schema=Explanation,
             temperature=0.2,
-            max_output_tokens=20000,
         )
+        if TOKEN_STEPS[step] is not None:
+            kwargs["max_output_tokens"] = TOKEN_STEPS[step]
         if fast:
             # Little/no "thinking": reading a report into a fixed JSON shape does not need it.
             kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
@@ -93,14 +98,15 @@ def analyze(
     MAX_TOTAL = 170  # seconds: never keep the user waiting longer than this overall
     for m in candidates:
         fast = True  # each model starts with the quick setting
+        step = 0
         if errors and time.monotonic() - started > MAX_TOTAL:
             break
         attempt = 0
         tries = 0
-        while tries < 3 and attempt < 2:  # at most one busy-retry per model (+1 for the thinking fallback)
+        while tries < 5 and attempt < 2:  # one busy-retry per model, plus free retries for rejected settings
             tries += 1
             try:
-                resp = client.models.generate_content(model=m, contents=parts, config=_config(fast))
+                resp = client.models.generate_content(model=m, contents=parts, config=_config(fast, step))
                 parsed = getattr(resp, "parsed", None)
                 result = parsed if isinstance(parsed, Explanation) \
                     else Explanation.model_validate_json(resp.text)
@@ -114,8 +120,10 @@ def analyze(
                     continue
                 if "404" in low or "not_found" in low or "no longer available" in low:
                     break  # model gone: next model
-                if (_busy(low) or "timed out" in low or "timeout" in low) and attempt == 0 \
-                        and time.monotonic() - started < MAX_TOTAL:
+                if ("400" in low or "invalid_argument" in low) and step < len(TOKEN_STEPS) - 1:
+                    step += 1  # setting rejected: retry the same model with a smaller/default output size
+                    continue
+                if _busy(low) and attempt == 0 and time.monotonic() - started < MAX_TOTAL:
                     attempt += 1
                     time.sleep(1.5)
                     continue
