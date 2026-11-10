@@ -10,6 +10,8 @@ from samples import SAMPLES, demo_explanation
 from verify import check_completeness, verify
 
 DEFAULT_MODEL = "gemini-3.8-flash"
+# Backups tried in order. Each model has its own capacity, so when one is busy another is often free.
+FALLBACK_MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.8-flash"]
 SUPPORTED_MIME = {
     "pdf": "application/pdf",
     "png": "image/png",
@@ -65,7 +67,7 @@ def analyze(
     # Hard time limit per attempt so the app never hangs for minutes.
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=80_000))  # 80 s: long reports have many findings
     candidates = []
-    for m in [model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]:
+    for m in [model] + FALLBACK_MODELS:
         if m and m not in candidates:
             candidates.append(m)
 
@@ -96,41 +98,55 @@ def analyze(
     result = None
     started = time.monotonic()
     MAX_TOTAL = 170  # seconds: never keep the user waiting longer than this overall
-    for m in candidates:
-        fast = True  # each model starts with the quick setting
-        step = 0
-        if errors and time.monotonic() - started > MAX_TOTAL:
-            break
-        attempt = 0
-        tries = 0
-        while tries < 5 and attempt < 2:  # one busy-retry per model, plus free retries for rejected settings
-            tries += 1
-            try:
-                resp = client.models.generate_content(model=m, contents=parts, config=_config(fast, step))
-                parsed = getattr(resp, "parsed", None)
-                result = parsed if isinstance(parsed, Explanation) \
-                    else Explanation.model_validate_json(resp.text)
-                used_model = m
+    def _transient(msg):
+        l = msg.lower()
+        return any(k in l for k in ("503", "504", "500", "unavailable", "overloaded", "high demand", "429",
+                                    "resource_exhausted", "deadline", "timed out", "timeout", "internal"))
+
+    for round_no in range(2):  # round 2 = wait a few seconds, then try the whole chain again
+        n_before = len(errors)
+        for m in candidates:
+            fast = True  # each model starts with the quick setting
+            step = 0
+            if errors and time.monotonic() - started > MAX_TOTAL:
                 break
-            except Exception as e:  # noqa: BLE001
-                last_error = e
-                errors.append((m, type(e).__name__ + ": " + str(e)[:160]))
-                low = str(e).lower()
-                if "thinking" in low and fast:
-                    fast = False  # this model rejects the thinking setting: retry without it (free retry)
-                    continue
-                if "404" in low or "not_found" in low or "no longer available" in low:
-                    break  # model gone: next model
-                if ("400" in low or "invalid_argument" in low) and step < len(TOKEN_STEPS) - 1:
-                    step += 1  # setting rejected: retry the same model with a smaller/default output size
-                    continue
-                if _busy(low) and attempt == 0 and time.monotonic() - started < MAX_TOTAL:
-                    attempt += 1
-                    time.sleep(1.5)
-                    continue
+            attempt = 0
+            tries = 0
+            while tries < 5 and attempt < 2:  # one busy-retry per model, plus free retries for rejected settings
+                tries += 1
+                try:
+                    resp = client.models.generate_content(model=m, contents=parts, config=_config(fast, step))
+                    parsed = getattr(resp, "parsed", None)
+                    result = parsed if isinstance(parsed, Explanation) \
+                        else Explanation.model_validate_json(resp.text)
+                    used_model = m
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    errors.append((m, type(e).__name__ + ": " + str(e)[:160]))
+                    low = str(e).lower()
+                    if "thinking" in low and fast:
+                        fast = False  # this model rejects the thinking setting: retry without it (free retry)
+                        continue
+                    if "404" in low or "not_found" in low or "no longer available" in low:
+                        break  # model gone: next model
+                    if ("400" in low or "invalid_argument" in low) and step < len(TOKEN_STEPS) - 1:
+                        step += 1  # setting rejected: retry the same model with a smaller/default output size
+                        continue
+                    if _busy(low) and attempt == 0 and time.monotonic() - started < MAX_TOTAL:
+                        attempt += 1
+                        time.sleep(1.5)
+                        continue
+                    break
+            if result is not None:
                 break
+
         if result is not None:
             break
+        new = [e_[1] for e_ in errors[n_before:] if "404" not in e_[1] and "not_found" not in e_[1].lower()]  # a retired model is not a reason to stop
+        if not new or not all(_transient(x) for x in new) or time.monotonic() - started > MAX_TOTAL - 20:
+            break  # a real error (bad key, bad file...) will not fix itself, so do not wait
+        time.sleep(6)
 
     if result is None:
         # Prefer the most useful error: a "model not found" from one candidate must not hide a busy/key/timeout problem on another.
@@ -256,7 +272,7 @@ def answer_followup(question: str, result, history, api_key, model: str = DEFAUL
     contents = build_followup_message(followup_context(result), question, history)
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=30_000))
     candidates = []
-    for m in [model, "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]:
+    for m in [model] + FALLBACK_MODELS:
         if m and m not in candidates:
             candidates.append(m)
     started, errors = time.monotonic(), []
