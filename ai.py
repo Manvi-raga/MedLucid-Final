@@ -2,7 +2,7 @@
 import time
 from typing import Optional
 
-from schema import Explanation
+from schema import Explanation, MoreFindings
 import re
 
 from prompts import FOLLOWUP_SYSTEM, SYSTEM_INSTRUCTION, build_followup_message, build_user_message
@@ -110,6 +110,7 @@ def analyze(
                 parsed = getattr(resp, "parsed", None)
                 result = parsed if isinstance(parsed, Explanation) \
                     else Explanation.model_validate_json(resp.text)
+                used_model = m
                 break
             except Exception as e:  # noqa: BLE001
                 last_error = e
@@ -160,7 +161,35 @@ def analyze(
     if not result.findings and result.is_medical_report:
         raise AnalysisError("The AI could not pick out the individual results in this document. Please press "
                             "Explain my report again, or try a clearer file.")
-    check_completeness(result)
+    # Second pass: if the AI counted more results than it listed, ask once for exactly the missing ones.
+    rechecked = False
+    seen = result.tests_seen or 0
+    if seen and len(result.findings) < seen and time.monotonic() - started < MAX_TOTAL:
+        rechecked = True
+        have = {f.name.strip().lower() for f in result.findings}
+        ask = ("These results are already listed: " + "; ".join(f.name for f in result.findings) + ". "
+               "Now find every individual test result in the report that is NOT in that list and return only those "
+               "as findings, following the same rules. If every result is already listed, return an empty list.")
+        for fast_try in (True, False):
+            try:
+                kw = dict(system_instruction=SYSTEM_INSTRUCTION, response_mime_type="application/json",
+                          response_schema=MoreFindings, temperature=0.2, max_output_tokens=8192)
+                if fast_try:
+                    kw["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+                resp = client.models.generate_content(model=used_model, contents=parts + [ask],
+                                                      config=types.GenerateContentConfig(**kw))
+                more = getattr(resp, "parsed", None)
+                if not isinstance(more, MoreFindings):
+                    more = MoreFindings.model_validate_json(resp.text)
+                for f in more.findings:
+                    if f.name.strip().lower() not in have:
+                        have.add(f.name.strip().lower())
+                        result.findings.append(f)
+                break
+            except Exception:  # noqa: BLE001  the extra pass is a bonus; never fail the whole report because of it
+                continue
+
+    check_completeness(result, rechecked)
     changed = verify(result)
     if changed:
         result.limits_note = (result.limits_note + " Some statuses were re-checked automatically against the "
