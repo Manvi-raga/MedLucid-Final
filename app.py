@@ -184,7 +184,7 @@ if st.session_state.step == 1:
         else:
             args = dict(report_text=SAMPLE_TEXT[st.session_state.sample])
         try:
-            with st.spinner("Reading your report and your question together…"):
+            with st.spinner("Reading your report and your question together… If the AI service is busy, we retry automatically for up to about 2 minutes."):
                 result, is_demo = ai.analyze(concern=st.session_state.concern, api_key=API_KEY, model=MODEL, **args)
             if not result.is_medical_report:
                 st.warning("This doesn't look like a medical report. Please upload a lab report or prescription.")
