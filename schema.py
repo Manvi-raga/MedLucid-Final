@@ -38,3 +38,8 @@ class Explanation(BaseModel):
     limits_note: str = Field(description="What this explanation cannot know (history, symptoms, other results)")
     completeness_note: Optional[str] = Field(default=None, description="Always leave null. Filled in by the app, not by you.")
     seek_care_note: Optional[str] = Field(default=None, description="Only if values look urgent per the report's own flags: advise contacting a doctor promptly. Otherwise null.")
+
+
+class MoreFindings(BaseModel):
+    """Used only for the second pass that looks for results the first pass left out."""
+    findings: list[Finding]
