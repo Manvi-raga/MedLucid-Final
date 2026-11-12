@@ -50,10 +50,15 @@ h1, h2, h3 {font-family: Georgia, 'Cambria', serif; color: #0B2E3A; letter-spaci
 .ml-src summary {cursor:pointer; color:#028090;}
 .ml-src code {background:#F1F6F7; padding:.1rem .35rem; border-radius:5px; color:#1F2D33; font-size:.8rem;}
 
-.ml-bar {position:relative; height:10px; border-radius:6px; background:#E6ECEE; margin:.7rem 0 .15rem 0;}
+.ml-bar {position:relative; height:10px; border-radius:6px; background:#E6ECEE; margin:.25rem 0 .1rem 0;}
 .ml-zone {position:absolute; top:0; height:10px; border-radius:6px; background:#BFE9DF;}
 .ml-mark {position:absolute; top:-5px; width:6px; height:20px; border-radius:3px; transform:translateX(-3px);}
-.ml-bar-lbls {display:flex; justify-content:space-between; font-size:.72rem; color:#5B6B72;}
+.ml-scale {margin:.2rem 0 .5rem 0;}
+.ml-you {position:relative; height:1.1rem; font-size:.78rem; font-weight:700; white-space:nowrap; transform:translateX(-50%); width:max-content;}
+.ml-ticks {position:relative; height:1.15rem; font-size:.72rem; color:#5B6B72;}
+.ml-tick {position:absolute; top:0; text-align:center; white-space:nowrap;}
+.ml-tick:before {content:""; display:block; width:1px; height:4px; background:#9AA9AF; margin:0 auto 1px auto;}
+.ml-cap {font-size:.74rem; color:#5B6B72;}
 
 .ml-q {display:flex; gap:.7rem; padding:.55rem 0; border-bottom:1px dashed #D7E3E6;}
 .ml-q:last-child {border-bottom:none;}
@@ -103,8 +108,29 @@ def _fmt(x: float) -> str:
     return f"{x:g}"
 
 
-def range_bar_html(value: Optional[float], low: Optional[float], high: Optional[float], color: str) -> str:
-    """A small visual showing where the result sits against the printed reference range."""
+def range_verdict(value: float, low: Optional[float], high: Optional[float]) -> str:
+    if low is not None and value < low:
+        return "below the normal range"
+    if high is not None and value > high:
+        return "above the normal range"
+    return "within the normal range"
+
+
+def range_caption(value: float, low: Optional[float], high: Optional[float], unit: str = "") -> str:
+    u = f" {unit}".rstrip() if unit else ""
+    if low is not None and high is not None:
+        rng = f"Normal range {_fmt(low)}\u2013{_fmt(high)}{u}"
+    elif high is not None:
+        rng = f"Normal: up to {_fmt(high)}{u}"
+    else:
+        rng = f"Normal: {_fmt(low)}{u} or more"
+    return f"{rng} \u00b7 Your result is {range_verdict(value, low, high)}"
+
+
+def range_bar_html(value: Optional[float], low: Optional[float], high: Optional[float], color: str,
+                   unit: str = "") -> str:
+    """Where the result sits against the printed range. The 'You' label sits on the marker and the range
+    numbers sit under the edges of the green zone, so a marker next to a number never reads as 'on' that number."""
     if value is None or (low is None and high is None):
         return ""
     zone_lo = low if low is not None else min(0.0, value)
@@ -120,13 +146,23 @@ def range_bar_html(value: Optional[float], low: Optional[float], high: Optional[
         return max(0.0, min(100.0, (x - dmin) / span * 100))
 
     zl, zr = (0.0 if low is None else pos(zone_lo)), (100.0 if high is None else pos(zone_hi))
-    lbl_l = _fmt(low) if low is not None else ""
-    lbl_r = _fmt(high) if high is not None else ""
+    pv = pos(value)
+    you_left = min(max(pv, 12.0), 88.0)
+    ticks = ""
+    close = low is not None and high is not None and abs(zr - zl) < 16
+    if low is not None:
+        tf = "translateX(-100%)" if close else "translateX(-50%)"
+        ticks += f'<span class="ml-tick" style="left:{min(max(zl, 3), 97):.1f}%;transform:{tf}">{_fmt(low)}</span>'
+    if high is not None:
+        tf = "translateX(0%)" if close else "translateX(-50%)"
+        ticks += f'<span class="ml-tick" style="left:{min(max(zr, 3), 97):.1f}%;transform:{tf}">{_fmt(high)}</span>'
     return (
+        f'<div class="ml-scale">'
+        f'<div class="ml-you" style="left:{you_left:.1f}%;color:{color}">You: {_fmt(value)}</div>'
         f'<div class="ml-bar"><div class="ml-zone" style="left:{zl:.1f}%;width:{max(zr - zl, 1):.1f}%"></div>'
-        f'<div class="ml-mark" style="left:{pos(value):.1f}%;background:{color}"></div></div>'
-        f'<div class="ml-bar-lbls"><span>{"expected from " + lbl_l if lbl_l else ""}</span>'
-        f'<span>{"up to " + lbl_r if lbl_r else ""}</span></div>'
+        f'<div class="ml-mark" style="left:{pv:.1f}%;background:{color}"></div></div>'
+        f'<div class="ml-ticks">{ticks}</div>'
+        f'<div class="ml-cap">{esc(range_caption(value, low, high, unit))}</div></div>'
     )
 
 
@@ -158,7 +194,7 @@ from visuals import picture_html
 
 def finding_html(f) -> str:
     st = STATUS_STYLE[f.status]
-    bar = range_bar_html(f.numeric_value, f.ref_low, f.ref_high, st["bar"])
+    bar = range_bar_html(f.numeric_value, f.ref_low, f.ref_high, st["bar"], f.unit)
     ref = f'<div class="ml-src">Report range: {esc(f.reference_text)}</div>' if f.reference_text and not bar else ""
     note = (f'<div class="ml-check">&#9888; {esc(f.check_note)}</div>') if getattr(f, 'check_note', None) else ''
     src = (f'<details class="ml-src"><summary>Where this came from in your report</summary>'
