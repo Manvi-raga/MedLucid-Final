@@ -66,17 +66,19 @@ S = {
 
 
 class RangeBar(Flowable):
-    """Same geometry as the on-screen bar: shaded 'expected' zone, coloured marker for the result."""
+    """Same layout as the on-screen scale: 'You' label on the marker, range numbers under the green zone's edges,
+    and one plain sentence saying whether the result is below, within or above the normal range."""
 
-    def __init__(self, width, value, low, high, color):
+    def __init__(self, width, value, low, high, color, unit=""):
         super().__init__()
-        self.w, self.value, self.low, self.high, self.color = width, value, low, high, color
-        self.height = 24
+        self.w, self.value, self.low, self.high, self.color, self.unit = width, value, low, high, color, unit
+        self.height = 44
 
     def wrap(self, aw, ah):
         return self.w, self.height
 
     def draw(self):
+        from ui import range_caption
         v, low, high = self.value, self.low, self.high
         zone_lo = low if low is not None else min(0.0, v)
         zone_hi = high if high is not None else max(v, low or 0) * 1.35
@@ -91,7 +93,7 @@ class RangeBar(Flowable):
             return max(0.0, min(1.0, (x - dmin) / span)) * self.w
 
         c = self.canv
-        y = 12
+        y = 22
         c.setFillColor(colors.HexColor("#E6ECEE"))
         c.roundRect(0, y, self.w, 6, 3, stroke=0, fill=1)
         zl = 0 if low is None else pos(zone_lo)
@@ -100,12 +102,29 @@ class RangeBar(Flowable):
         c.roundRect(zl, y, max(zr - zl, 3), 6, 3, stroke=0, fill=1)
         c.setFillColor(colors.HexColor(self.color))
         c.roundRect(pos(v) - 1.8, y - 3, 3.6, 12, 1.5, stroke=0, fill=1)
+        # "You: x" label above the marker (kept inside the bar's width)
+        c.setFont("Helvetica-Bold", 8)
+        label = f"You: {v:g}"
+        lw = c.stringWidth(label, "Helvetica-Bold", 8)
+        c.drawString(min(max(pos(v) - lw / 2, 0), self.w - lw), y + 13, label)
+        # range numbers under the edges of the green zone
         c.setFont("Helvetica", 7.5)
         c.setFillColor(colors.HexColor(MUTED))
-        if low is not None:
-            c.drawString(0, 1, f"expected from {low:g}")
-        if high is not None:
-            c.drawRightString(self.w, 1, f"up to {high:g}")
+        close = low is not None and high is not None and abs(zr - zl) < self.w * 0.16
+        for val, x, side in ((low, zl, "l"), (high, zr, "r")):
+            if val is None:
+                continue
+            c.setStrokeColor(colors.HexColor("#9AA9AF"))
+            c.line(x, y - 1, x, y - 4)
+            t = f"{val:g}"
+            tw = c.stringWidth(t, "Helvetica", 7.5)
+            if close:
+                tx = x - tw if side == "l" else x
+            else:
+                tx = x - tw / 2
+            c.drawString(min(max(tx, 0), self.w - tw), y - 12, t)
+        c.setFont("Helvetica", 7.5)
+        c.drawString(0, 1, range_caption(v, low, high, self.unit).encode("cp1252", "replace").decode("cp1252"))
 
 
 def _picture(kind, f, width):
@@ -172,7 +191,7 @@ def _finding_card(f):
                               ("BOTTOMPADDING", (0, 0), (-1, -1), 0)]))
     content = [head, Spacer(1, 6)]
     if f.numeric_value is not None and (f.ref_low is not None or f.ref_high is not None):
-        content += [RangeBar(inner_w, f.numeric_value, f.ref_low, f.ref_high, st["bar"]), Spacer(1, 4)]
+        content += [RangeBar(inner_w, f.numeric_value, f.ref_low, f.ref_high, st["bar"], f.unit), Spacer(1, 4)]
     elif f.reference_text:
         content += [Paragraph(f"Report range: {clean(f.reference_text)}", S["small"]), Spacer(1, 3)]
     if getattr(f, "check_note", None):
